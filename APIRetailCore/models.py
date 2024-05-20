@@ -1,5 +1,5 @@
 from django.contrib.auth.base_user import BaseUserManager
-from django.contrib.auth.models import AbstractBaseUser
+from django.contrib.auth.models import AbstractUser
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
@@ -42,6 +42,7 @@ class UserManager(BaseUserManager):
     def create_superuser(self, email, password, **extra_fields):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
+        extra_fields.setdefault('is_active', True)
 
         if extra_fields.get('is_staff') is not True:
             raise ValueError('Superuser must have is_staff=True.')
@@ -51,14 +52,15 @@ class UserManager(BaseUserManager):
         return self._create_user(email, password, **extra_fields)
 
 
-class User(AbstractBaseUser):
+class User(AbstractUser):
     REQUIRED_FIELDS = []
+    objects = UserManager()
     USERNAME_FIELD = 'email'
-    company = models.CharField(max_length=50, blank=True, verbose_name='Компания')
+    company = models.CharField(max_length=60, blank=True, verbose_name='Компания')
     position = models.CharField(max_length=50, blank=True, verbose_name='Должность')
     email = models.EmailField(_('email address'), unique=True)
     username_validator = UnicodeUsernameValidator()
-    user_name = models.CharField(
+    username = models.CharField(
         _('username'),
         max_length=150,
         help_text=_('Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only.'),
@@ -73,7 +75,7 @@ class User(AbstractBaseUser):
     type = models.CharField(max_length=5, blank=True, verbose_name='Тип пользователя', default='buyer')
 
     def __str__(self):
-        return self.user_name
+        return f'{self.first_name} {self.last_name}'
 
     class Meta:
         verbose_name = 'Пользователь'

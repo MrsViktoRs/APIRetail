@@ -17,6 +17,10 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 
+from APIRetailCore.views import UpdateView, RegisterUserView
+
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('update/', UpdateView.as_view()),
+    path('register/', RegisterUserView.as_view()),
 ]
