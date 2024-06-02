@@ -6,8 +6,13 @@ from APIRetailCore.models import *
 class ControllingViewSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ('id', 'first_name', 'last_name', 'email', 'company', 'position')
+        fields = ('id', 'first_name', 'last_name', 'email', 'company', 'position', 'type')
         read_only_fields = ('id',)
+
+    def update(self, instance, validated_data):
+        instance.type = validated_data.get('type', instance.type)
+        instance.save()
+        return instance
 
 
 class ContactSerializer(serializers.ModelSerializer):
