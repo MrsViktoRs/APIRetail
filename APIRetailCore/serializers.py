@@ -93,3 +93,8 @@ class OrderSerializer(serializers.ModelSerializer):
 
     total_sum = serializers.IntegerField()
     contact = ContactSerializer(read_only=True)
+
+    class Meta:
+        model = Order
+        fields = ('id', 'ordered_items', 'state', 'dt', 'total_sum', 'contact',)
+        read_only_fields = ('id',)
