@@ -73,6 +73,9 @@ class User(AbstractUser):
         'Designates whether this user should be treated as active. ')
                                     )
     type = models.CharField(max_length=5, blank=True, verbose_name='Тип пользователя', default='buyer')
+    reset_mode = models.BooleanField(_('active'), default=False, help_text=_(
+        'Determines whether password reset mode is enabled ')
+                                     )
 
     def __str__(self):
         return f'{self.first_name} {self.last_name}'

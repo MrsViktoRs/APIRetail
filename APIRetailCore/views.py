@@ -22,7 +22,7 @@ from APIRetailCore.models import User, Category, Shop, Product, ProductInfo, Con
     Parameter, Order, OrderItem, Contact
 from APIRetailCore.serializers import UserSerializer, ControllingViewSerializer, CategorySerializer, ShopSerializer, \
     ProductSerializer, ProductInfoSerializer, OrderSerializer, OrderItemSerializer, ContactSerializer
-from APIRetailCore.singnals import new_user_registered
+from APIRetailCore.singnals import new_user_registered, reset_password, new_order
 
 
 class RegisterUserView(APIView):
@@ -51,10 +51,9 @@ class ConfirmAccountView(View):
         token = ConfirmEmailToken.objects.filter(key=request.GET['token']).first()
         if token:
             token.user.is_active = True
-            new_token = Token.objects.create(user=token.user)
             token.user.save()
             token.delete()
-            return HttpResponse(f'Ваш аккаунт подтвержден, ваш токен: {new_token.key}')
+            return HttpResponse(f'Ваш аккаунт подтвержден.')
         else:
             return HttpResponse('Что-то пошло не так')
 
@@ -105,6 +104,47 @@ class AccountDetails(APIView):
             return JsonResponse(serializer.data)
         else:
             return JsonResponse({'Status': False, 'Errors': serializer.errors})
+
+
+class ResetPasswordView(APIView):
+    def post(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({'Status': False, 'Error': 'Log in required'}, status=403)
+        if 'email' in request.data:
+            user = User.objects.filter(email=request.data['email']).first()
+            user.is_active = False
+            user.reset_mode = True
+            reset_password.send(sender=self.__class__, user_id=user.id)
+            user.save()
+            return JsonResponse(
+                {'Status': True, 'message': f'Письмо для востановления пароля отправлено на {request.data["email"]}'}
+            )
+        return JsonResponse({'Status': False, 'Error': 'Не указан email'})
+
+
+class ChangePasswordView(APIView):
+    def post(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({'Status': False, 'Error': 'Log in required'}, status=403)
+        if not request.user.is_active:
+            return JsonResponse({'Status': False, 'Error': 'Ожидает подтверждения почты'}, status=403)
+        if not request.user.reset_mode:
+            return JsonResponse({'Status': False, 'Error': 'Нет запроса на сброс пароля'}, status=403)
+        user = User.objects.filter(email=request.user.email).first()
+        if 'password' in request.data:
+            try:
+                validate_password(request.data['password'])
+            except Exception as password_error:
+                error_array = []
+                for error in password_error:
+                    error_array.append(error)
+                return JsonResponse({'Status': False, 'Errors': error_array})
+            else:
+                user.set_password(request.data['password'])
+                user.reset_mode = False
+                user.save()
+                return JsonResponse({'Status': True, 'message': 'Пароль изменен'})
+        return JsonResponse({'Status': False, 'Errors': 'Не указаны все необходимые аргументы'})
 
 
 class PartnerUpdate(APIView):
@@ -186,34 +226,38 @@ class ProductInfoV(APIView):
             return JsonResponse({'Status': False, 'Error': 'Log in required'}, status=403)
         if request.user.type != 'shop':
             return JsonResponse({'Status': False, 'Error': 'Только для магазинов'}, status=403)
-        try:
-            product_info = ProductInfo.objects.get(product_id=self.kwargs.get('pk'))
-            data = request.data
-            updated_fields = {field: data[field] for field in data if field != 'id'}
-            for field, value in updated_fields.items():
-                setattr(product_info, field, value)
-            product_info.save()
-            if updated_fields['parameter']:
-                try:
-                    parameter = Parameter.objects.get(name=updated_fields['parameter'])
-                    product_parameter = ProductParameter.objects.get(product_info_id=product_info.id,
-                                                                     parameter_id=parameter.id)
-                    product_parameter.value = updated_fields['value']
-                    product_parameter.save()
-                except Parameter.DoesNotExist:
-                    parameter = Parameter.objects.create(name=updated_fields['parameter'])
-                    ProductParameter.objects.create(product_info_id=product_info.id,
-                                                    parameter_id=parameter.id,
-                                                    value=updated_fields['value'])
-            return JsonResponse({'Status': True})
-        except Exception as e:
-            return JsonResponse({'Status': False, 'Errors': e.args})
+        shop = Shop.objects.get(user_id=request.user.id)
+        if shop.user_id != request.user.id:
+            return JsonResponse({'Status': False, 'Error': 'Только для своих магазинов'}, status=403)
+        product_info = ProductInfo.objects.get(product_id=self.kwargs.get('pk'))
+        data = request.data
+        updated_fields = {field: data[field] for field in data if field != 'id'}
+        for field, value in updated_fields.items():
+            setattr(product_info, field, value)
+        product_info.save()
+        if 'parameter' in updated_fields:
+            try:
+                parameter = Parameter.objects.get(name=updated_fields['parameter'])
+                product_parameter = ProductParameter.objects.get(product_info_id=product_info.id,
+                                                                 parameter_id=parameter.id)
+                product_parameter.value = updated_fields['value']
+                product_parameter.save()
+            except Parameter.DoesNotExist:
+                parameter = Parameter.objects.create(name=updated_fields['parameter'])
+                ProductParameter.objects.create(product_info_id=product_info.id,
+                                                parameter_id=parameter.id,
+                                                value=updated_fields['value'])
+                return JsonResponse({'Status': True})
+        return JsonResponse({'Status': True})
 
     def delete(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
             return JsonResponse({'Status': False, 'Error': 'Log in required'}, status=403)
         if request.user.type != 'shop':
             return JsonResponse({'Status': False, 'Error': 'Только для магазинов'}, status=403)
+        shop = Shop.objects.get(user_id=request.user.id)
+        if shop.user_id != request.user.id:
+            return JsonResponse({'Status': False, 'Error': 'Только для своих магазинов'}, status=403)
         try:
             product_info = ProductInfo.objects.get(product_id=self.kwargs.get('pk'))
             product = Product.objects.get(name=product_info.product.name)
@@ -238,7 +282,7 @@ class BasketView(APIView):
             'ordered_items__product_info__product_parameters__parameter').annotate(
             total_sum=Sum(F('ordered_items__quantity') * F('ordered_items__product_info__price'))).distinct()
         serializer = OrderSerializer(basket, many=True)
-        return JsonResponse({'sattus': True, 'basket': serializer.data})
+        return JsonResponse({'Status': True, 'basket': serializer.data})
 
     # редактировать корзину
     def post(self, request, *args, **kwargs):
@@ -420,5 +464,46 @@ class ContactView(APIView):
                         return JsonResponse({'Status': True})
                     else:
                         JsonResponse({'Status': False, 'Errors': serializer.errors})
+
+        return JsonResponse({'Status': False, 'Errors': 'Не указаны все необходимые аргументы'})
+
+
+class OrderView(APIView):
+    """
+    Класс для получения и размешения заказов пользователями
+    """
+
+    # получить мои заказы
+    def get(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({'Status': False, 'Error': 'Log in required'}, status=403)
+        order = Order.objects.filter(
+            user_id=request.user.id).exclude(state='basket').prefetch_related(
+            'ordered_items__product_info__product__category',
+            'ordered_items__product_info__product_parameters__parameter').select_related('contact').annotate(
+            total_sum=Sum(F('ordered_items__quantity') * F('ordered_items__product_info__price'))).distinct()
+
+        serializer = OrderSerializer(order, many=True)
+        return JsonResponse({'orders': serializer.data})
+
+    # разместить заказ из корзины
+    def post(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({'Status': False, 'Error': 'Log in required'}, status=403)
+
+        if {'id', 'contact'}.issubset(request.data):
+            if request.data['id'].isdigit():
+                try:
+                    is_updated = Order.objects.filter(
+                        user_id=request.user.id, id=request.data['id']).update(
+                        contact_id=request.data['contact'],
+                        state='new')
+                except IntegrityError as error:
+                    print(error)
+                    return JsonResponse({'Status': False, 'Errors': 'Неправильно указаны аргументы'})
+                else:
+                    if is_updated:
+                        new_order.send(sender=self.__class__, user_id=request.user.id)
+                        return JsonResponse({'Status': True})
 
         return JsonResponse({'Status': False, 'Errors': 'Не указаны все необходимые аргументы'})
